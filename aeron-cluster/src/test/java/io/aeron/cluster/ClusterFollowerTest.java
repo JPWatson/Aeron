@@ -324,6 +324,8 @@ public class ClusterFollowerTest
 
         sendMessages(msgBuffer);
         awaitResponses(MESSAGE_COUNT);
+
+        assertThat(countNumberOfEntriesForTerm(followerMemberId, 0), is(1));
     }
 
     @Test(timeout = 30_000)
@@ -590,5 +592,25 @@ public class ClusterFollowerTest
             });
 
         return electionState[0];
+    }
+
+    private int countNumberOfEntriesForTerm(final int index, final int termId)
+    {
+        final ClusteredMediaDriver driver = clusteredMediaDrivers[index];
+        final RecordingLog recordingLog = driver.consensusModule().context().recordingLog();
+
+        int count = 0;
+
+        for (RecordingLog.Entry entry : recordingLog.entries())
+        {
+            if (entry.leadershipTermId == termId && entry.type == RecordingLog.ENTRY_TYPE_TERM)
+            {
+                count++;
+
+                System.out.println(entry.toString());
+            }
+        }
+
+        return count;
     }
 }
