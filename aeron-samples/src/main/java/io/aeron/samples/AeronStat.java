@@ -21,7 +21,9 @@ import io.aeron.status.ChannelEndpointStatus;
 import org.agrona.DirectBuffer;
 import org.agrona.IoUtil;
 import org.agrona.SystemUtil;
+import org.agrona.concurrent.AtomicBuffer;
 import org.agrona.concurrent.SigInt;
+import org.agrona.concurrent.ringbuffer.ManyToOneRingBuffer;
 import org.agrona.concurrent.status.CountersReader;
 
 import java.io.File;
@@ -31,6 +33,7 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
@@ -97,6 +100,7 @@ public class AeronStat
     private static final String COUNTER_CHANNEL = "channel";
 
     private final CountersReader counters;
+    private final LongSupplier driverTimestamp;
     private final Pattern typeFilter;
     private final Pattern identityFilter;
     private final Pattern sessionFilter;
@@ -105,6 +109,7 @@ public class AeronStat
 
     public AeronStat(
         final CountersReader counters,
+        final LongSupplier driverTimestamp,
         final Pattern typeFilter,
         final Pattern identityFilter,
         final Pattern sessionFilter,
@@ -112,6 +117,7 @@ public class AeronStat
         final Pattern channelFilter)
     {
         this.counters = counters;
+        this.driverTimestamp = driverTimestamp;
         this.typeFilter = typeFilter;
         this.identityFilter = identityFilter;
         this.sessionFilter = sessionFilter;
@@ -119,9 +125,10 @@ public class AeronStat
         this.channelFilter = channelFilter;
     }
 
-    public AeronStat(final CountersReader counters)
+    public AeronStat(final CountersReader counters, final LongSupplier driverTimestamp)
     {
         this.counters = counters;
+        this.driverTimestamp = driverTimestamp;
         this.typeFilter = null;
         this.identityFilter = null;
         this.sessionFilter = null;
@@ -129,7 +136,7 @@ public class AeronStat
         this.channelFilter = null;
     }
 
-    public static CountersReader mapCounters()
+    public static CnCHandle mapCounters()
     {
         final File cncFile = CommonContext.newDefaultCncFile();
         System.out.println("Command `n Control file " + cncFile);
@@ -137,6 +144,8 @@ public class AeronStat
         final MappedByteBuffer cncByteBuffer = IoUtil.mapExistingFile(cncFile, "cnc");
         final DirectBuffer cncMetaData = createMetaDataBuffer(cncByteBuffer);
         final int cncVersion = cncMetaData.getInt(cncVersionOffset(0));
+        final AtomicBuffer toDriverBuffer = createToDriverBuffer(cncByteBuffer, cncMetaData);
+        final ManyToOneRingBuffer toDriverRingBuffer = new ManyToOneRingBuffer(toDriverBuffer);
 
         if (CNC_VERSION != cncVersion)
         {
@@ -144,10 +153,14 @@ public class AeronStat
                 "Aeron CnC version does not match: version=" + cncVersion + " required=" + CNC_VERSION);
         }
 
-        return new CountersReader(
+        final CountersReader countersReader = new CountersReader(
             createCountersMetaDataBuffer(cncByteBuffer, cncMetaData),
             createCountersValuesBuffer(cncByteBuffer, cncMetaData),
             StandardCharsets.US_ASCII);
+
+
+        return new CnCHandle(countersReader, toDriverRingBuffer);
+
     }
 
     public static void main(final String[] args) throws Exception
@@ -208,8 +221,10 @@ public class AeronStat
             }
         }
 
+        final CnCHandle cnCHandle = mapCounters();
         final AeronStat aeronStat = new AeronStat(
-            mapCounters(), typeFilter, identityFilter, sessionFilter, streamFilter, channelFilter);
+            cnCHandle.reader, () -> cnCHandle.driverBuffer.consumerHeartbeatTime(),
+            typeFilter, identityFilter, sessionFilter, streamFilter, channelFilter);
         final AtomicBoolean running = new AtomicBoolean(true);
         SigInt.register(() -> running.set(false));
 
@@ -222,12 +237,35 @@ public class AeronStat
 
             System.out.print(dateFormat.format(new Date()));
             System.out.println(header);
+            System.out.println(
+                "Driver heartbeat: (" + aeronStat.getDriverHeartbeat() +
+                "/" + dateFormat.format(new Date(aeronStat.getDriverHeartbeat())) + ")"
+            );
+
             System.out.println("======================================================================");
 
             aeronStat.print(System.out);
             System.out.println("--");
 
             Thread.sleep(delayMs);
+        }
+    }
+
+    private long getDriverHeartbeat()
+    {
+        return this.driverTimestamp.getAsLong();
+    }
+
+    static class CnCHandle
+    {
+        CountersReader reader;
+        ManyToOneRingBuffer driverBuffer;
+
+        CnCHandle(final CountersReader countersReader, final ManyToOneRingBuffer toDriverRingBuffer)
+        {
+
+            reader = countersReader;
+            driverBuffer = toDriverRingBuffer;
         }
     }
 
