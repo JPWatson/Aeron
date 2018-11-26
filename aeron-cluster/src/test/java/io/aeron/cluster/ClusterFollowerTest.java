@@ -41,6 +41,7 @@ import org.junit.Test;
 
 import java.io.File;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -193,6 +194,39 @@ public class ClusterFollowerTest
     }
 
     @Test(timeout = 30_000)
+    public void shutdownClusterAndAttemptToStartANode() throws Exception
+    {
+        startClient();
+
+        final int leaderMemberId = findLeaderId(NULL_VALUE);
+        assertThat(leaderMemberId, not(NULL_VALUE));
+
+        sendMessages();
+
+        stopAllNodes();
+
+        startNode(0, false);
+
+        Thread.sleep(15000);
+    }
+
+    private void sendMessages()
+    {
+        final ExpandableArrayBuffer msgBuffer = new ExpandableArrayBuffer();
+        msgBuffer.putStringWithoutLengthAscii(0, MSG);
+
+        sendMessages(msgBuffer);
+    }
+
+    private void stopAllNodes()
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            stopNode(i);
+        }
+    }
+
+    @Test(timeout = 30_000)
     public void shouldStopLeaderAndRestartAfterElectionAsFollower() throws Exception
     {
         int leaderMemberId;
@@ -245,10 +279,7 @@ public class ClusterFollowerTest
 
         startClient();
 
-        final ExpandableArrayBuffer msgBuffer = new ExpandableArrayBuffer();
-        msgBuffer.putStringWithoutLengthAscii(0, MSG);
-
-        sendMessages(msgBuffer);
+        sendMessages();
         awaitResponses(MESSAGE_COUNT);
     }
 
@@ -279,10 +310,7 @@ public class ClusterFollowerTest
 
         startClient();
 
-        final ExpandableArrayBuffer msgBuffer = new ExpandableArrayBuffer();
-        msgBuffer.putStringWithoutLengthAscii(0, MSG);
-
-        sendMessages(msgBuffer);
+        sendMessages();
         awaitResponses(MESSAGE_COUNT);
 
         final int newLeaderId = findLeaderId(NULL_VALUE);
@@ -320,10 +348,7 @@ public class ClusterFollowerTest
 
         startClient();
 
-        final ExpandableArrayBuffer msgBuffer = new ExpandableArrayBuffer();
-        msgBuffer.putStringWithoutLengthAscii(0, MSG);
-
-        sendMessages(msgBuffer);
+        sendMessages();
         awaitResponses(MESSAGE_COUNT);
     }
 
@@ -352,10 +377,7 @@ public class ClusterFollowerTest
 
         startClient();
 
-        final ExpandableArrayBuffer msgBuffer = new ExpandableArrayBuffer();
-        msgBuffer.putStringWithoutLengthAscii(0, MSG);
-
-        sendMessages(msgBuffer);
+        sendMessages();
         awaitResponses(MESSAGE_COUNT);
     }
 
@@ -427,6 +449,7 @@ public class ClusterFollowerTest
                 .logChannel(memberSpecificPort(LOG_CHANNEL, index))
                 .terminationHook(TestUtil.TERMINATION_HOOK)
                 .archiveContext(archiveCtx.clone())
+                .serviceHeartbeatTimeoutNs(TimeUnit.SECONDS.toNanos(2))
                 .deleteDirOnStart(cleanStart));
 
         containers[index] = ClusteredServiceContainer.launch(
