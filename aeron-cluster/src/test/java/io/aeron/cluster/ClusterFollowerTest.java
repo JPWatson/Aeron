@@ -41,8 +41,12 @@ import org.junit.Test;
 
 import java.io.File;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 
 import static io.aeron.Aeron.NULL_VALUE;
 import static io.aeron.cluster.service.CommitPos.COMMIT_POSITION_TYPE_ID;
@@ -72,6 +76,8 @@ public class ClusterFollowerTest
     private final CountDownLatch latchOne = new CountDownLatch(MEMBER_COUNT);
     private final CountDownLatch latchTwo = new CountDownLatch(MEMBER_COUNT - 1);
 
+    private final AtomicInteger errors = new AtomicInteger();
+
     private final EchoService[] echoServices = new EchoService[MEMBER_COUNT];
     private final ClusteredMediaDriver[] clusteredMediaDrivers = new ClusteredMediaDriver[MEMBER_COUNT];
     private final ClusteredServiceContainer[] containers = new ClusteredServiceContainer[MEMBER_COUNT];
@@ -81,6 +87,7 @@ public class ClusterFollowerTest
     private final MutableInteger responseCount = new MutableInteger();
     private final EgressListener egressMessageListener =
         (clusterSessionId, timestamp, buffer, offset, length, header) -> responseCount.value++;
+    private final ExecutorService executor = Executors.newFixedThreadPool(1);
 
     @Before
     public void before()
@@ -92,8 +99,10 @@ public class ClusterFollowerTest
     }
 
     @After
-    public void after()
+    public void after() throws InterruptedException
     {
+        executor.shutdownNow();
+
         CloseHelper.close(client);
         CloseHelper.close(clientMediaDriver);
 
@@ -117,6 +126,11 @@ public class ClusterFollowerTest
                 driver.consensusModule().context().deleteDirectory();
                 driver.archive().context().deleteArchiveDirectory();
             }
+        }
+
+        if (!executor.awaitTermination(5, TimeUnit.SECONDS))
+        {
+            System.out.println("Warning: not all tasks completed promptly");
         }
     }
 
@@ -359,6 +373,43 @@ public class ClusterFollowerTest
         awaitResponses(MESSAGE_COUNT);
     }
 
+    @Test(timeout = 60_000)
+    public void followerShouldRecoverWhileMessagesContinue() throws Exception
+    {
+        int leaderMemberId;
+        while (NULL_VALUE == (leaderMemberId = findLeaderId(NULL_VALUE)))
+        {
+            TestUtil.checkInterruptedStatus();
+            Thread.sleep(1000);
+        }
+
+        final ExpandableArrayBuffer msgBuffer = new ExpandableArrayBuffer();
+        msgBuffer.putStringWithoutLengthAscii(0, MSG);
+
+        startClient();
+        startMessageThread(msgBuffer, TimeUnit.MICROSECONDS.toNanos(500));
+
+        final int followerMemberIdA = (leaderMemberId + 1) >= MEMBER_COUNT ? 0 : (leaderMemberId + 1);
+        final int followerMemberIdB = (followerMemberIdA + 1) >= MEMBER_COUNT ? 0 : (followerMemberIdA + 1);
+
+        //stopNode(followerMemberIdA);
+        stopNode(followerMemberIdB);
+
+        Thread.sleep(10000);
+
+        startNode(followerMemberIdB, false);
+
+        Thread.sleep(30000);
+
+        assertThat(errors.get(), is(0));
+        assertNoElectionOn(followerMemberIdB);
+    }
+
+    private void assertNoElectionOn(final int memberId)
+    {
+        assertThat(electionCounterOf(memberId), is((long)NULL_VALUE));
+    }
+
 
     @Test(timeout = 30_000)
     public void membersShouldHaveOneCommitPositionCounter() throws Exception
@@ -404,7 +455,7 @@ public class ClusterFollowerTest
                 .threadingMode(ThreadingMode.SHARED)
                 .termBufferSparseFile(true)
                 .multicastFlowControlSupplier(new MinMulticastFlowControlSupplier())
-                .errorHandler(Throwable::printStackTrace)
+                .errorHandler(this::errorHandler)
                 .dirDeleteOnStart(true),
             new Archive.Context()
                 .maxCatalogEntries(MAX_CATALOG_ENTRIES)
@@ -418,7 +469,7 @@ public class ClusterFollowerTest
                 .deleteArchiveOnStart(cleanStart),
             new ConsensusModule.Context()
                 .epochClock(epochClock)
-                .errorHandler(Throwable::printStackTrace)
+                .errorHandler(this::errorHandler)
                 .clusterMemberId(index)
                 .clusterMembers(CLUSTER_MEMBERS)
                 .aeronDirectoryName(aeronDirName)
@@ -436,7 +487,13 @@ public class ClusterFollowerTest
                 .clusterDir(new File(baseDirName, "service"))
                 .clusteredService(echoServices[index])
                 .terminationHook(TestUtil.TERMINATION_HOOK)
-                .errorHandler(Throwable::printStackTrace));
+                .errorHandler(this::errorHandler));
+    }
+
+    private void errorHandler(Throwable ex)
+    {
+        ex.printStackTrace();
+        errors.incrementAndGet();
     }
 
     private void stopNode(final int index)
@@ -462,6 +519,28 @@ public class ClusterFollowerTest
                 .aeronDirectoryName(aeronDirName)
                 .ingressChannel("aeron:udp")
                 .clusterMemberEndpoints("0=localhost:20110,1=localhost:20111,2=localhost:20112"));
+    }
+
+    private void startMessageThread(final ExpandableArrayBuffer msgBuffer, long intervalNs)
+    {
+        executor.submit(() -> {
+            while (true)
+            {
+                while (client.offer(msgBuffer, 0, MSG.length()) < 0)
+                {
+                    if (Thread.interrupted())
+                    {
+                        return;
+                    }
+
+                    client.pollEgress();
+
+                    LockSupport.parkNanos(intervalNs);
+                }
+
+                client.pollEgress();
+            }
+        });
     }
 
     private void sendMessages(final ExpandableArrayBuffer msgBuffer)
