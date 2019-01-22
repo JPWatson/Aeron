@@ -272,6 +272,29 @@ class TestNode implements AutoCloseable
 
             wasSnapshotLoaded = true;
         }
+
+        @Override
+        public void onTimerEvent(long correlationId, long timestampMs)
+        {
+            log("onTimerEvent: correlationId=" + correlationId + ", ts=" + timestampMs);
+            if(cluster.role() == Cluster.Role.LEADER) {
+                cluster.scheduleTimer(1, cluster.timeMs() + TimeUnit.SECONDS.toMillis(5));
+            }
+
+        }
+
+        @Override
+        public void onRoleChange(Cluster.Role newRole)
+        {
+            log("Changing role to: " + newRole);
+            if(newRole == Cluster.Role.LEADER) {
+                cluster.scheduleTimer(1, cluster.timeMs() + TimeUnit.SECONDS.toMillis(5));
+            }
+        }
+
+        private static void log(String message) {
+            System.out.println(message);
+        }
     }
 
     static class TestNodeContext

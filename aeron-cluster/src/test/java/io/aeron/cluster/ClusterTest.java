@@ -31,6 +31,7 @@ import java.util.concurrent.locks.LockSupport;
 import static io.aeron.Aeron.NULL_VALUE;
 import static io.aeron.cluster.service.CommitPos.COMMIT_POSITION_TYPE_ID;
 import static org.hamcrest.core.Is.is;
+import static org.hamcrest.core.IsNull.nullValue;
 import static org.junit.Assert.*;
 
 @Ignore
@@ -379,6 +380,35 @@ public class ClusterTest
 
             cluster.awaitMessageCountForService(follower, messageCount);
 
+            assertThat(follower.errors(), is(0L));
+        }
+    }
+
+    @Test(timeout = 45_000)
+    public void followerShouldRecoverWithFunkyTimers() throws Exception
+    {
+        final int messageCount = 10;
+
+        try (TestCluster cluster = TestCluster.startThreeNodeStaticCluster(NULL_VALUE))
+        {
+            cluster.awaitLeader();
+            TestNode follower = cluster.followers().get(0);
+
+            Thread.sleep(10_000);
+
+            cluster.stopNode(follower);
+
+            Thread.sleep(10000);
+
+            follower = cluster.startStaticNode(follower.index(), false);
+
+            Thread.sleep(1000);
+
+            assertThat(follower.role(), is(Cluster.Role.FOLLOWER));
+
+            System.out.println("Election State + " + follower.electionState());
+
+            cluster.awaitMessageCountForService(follower, messageCount);
             assertThat(follower.errors(), is(0L));
         }
     }
