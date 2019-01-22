@@ -71,6 +71,10 @@ class StubClusteredService implements ClusteredService
     {
     }
 
+    public void onNewLeadershipTerm(long leadershipTermId, long timestampMs)
+    {
+    }
+
     protected long serviceCorrelationId(final int correlationId)
     {
         return ((long)cluster.context().serviceId()) << 32 | correlationId;

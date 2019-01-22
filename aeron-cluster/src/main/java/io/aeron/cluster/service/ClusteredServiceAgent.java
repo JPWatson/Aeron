@@ -388,6 +388,8 @@ class ClusteredServiceAgent implements Agent, Cluster
     {
         egressMessageHeaderEncoder.leadershipTermId(leadershipTermId);
         clusterTimeMs = timestampMs;
+
+        service.onNewLeadershipTerm(leadershipTermId, timestampMs);
     }
 
     @SuppressWarnings("unused")

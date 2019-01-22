@@ -112,4 +112,6 @@ public interface ClusteredService
      * @param cluster with which the service can interact.
      */
     void onTerminate(Cluster cluster);
+
+    void onNewLeadershipTerm(long leadershipTermId, long timestampMs);
 }
